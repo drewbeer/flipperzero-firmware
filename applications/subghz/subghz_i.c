@@ -52,7 +52,7 @@ void subghz_get_frequency_modulation(SubGhz* subghz, string_t frequency, string_
             subghz->txrx->preset == FuriHalSubGhzPreset2FSKDev476Async) {
             string_set(modulation, "FM");
         } else {
-            furi_crash(NULL);
+            furi_crash("SugGhz: Modulation is incorrect.");
         }
     }
 }
@@ -62,14 +62,14 @@ void subghz_begin(SubGhz* subghz, FuriHalSubGhzPreset preset) {
     furi_hal_subghz_reset();
     furi_hal_subghz_idle();
     furi_hal_subghz_load_preset(preset);
-    hal_gpio_init(&gpio_cc1101_g0, GpioModeInput, GpioPullNo, GpioSpeedLow);
+    furi_hal_gpio_init(&gpio_cc1101_g0, GpioModeInput, GpioPullNo, GpioSpeedLow);
     subghz->txrx->txrx_state = SubGhzTxRxStateIDLE;
 }
 
 uint32_t subghz_rx(SubGhz* subghz, uint32_t frequency) {
     furi_assert(subghz);
     if(!furi_hal_subghz_is_frequency_valid(frequency)) {
-        furi_crash(NULL);
+        furi_crash("SugGhz: Incorrect RX frequency.");
     }
     furi_assert(
         subghz->txrx->txrx_state != SubGhzTxRxStateRx &&
@@ -77,7 +77,7 @@ uint32_t subghz_rx(SubGhz* subghz, uint32_t frequency) {
 
     furi_hal_subghz_idle();
     uint32_t value = furi_hal_subghz_set_frequency_and_path(frequency);
-    hal_gpio_init(&gpio_cc1101_g0, GpioModeInput, GpioPullNo, GpioSpeedLow);
+    furi_hal_gpio_init(&gpio_cc1101_g0, GpioModeInput, GpioPullNo, GpioSpeedLow);
     furi_hal_subghz_flush_rx();
     furi_hal_subghz_rx();
 
@@ -90,13 +90,13 @@ uint32_t subghz_rx(SubGhz* subghz, uint32_t frequency) {
 static bool subghz_tx(SubGhz* subghz, uint32_t frequency) {
     furi_assert(subghz);
     if(!furi_hal_subghz_is_frequency_valid(frequency)) {
-        furi_crash(NULL);
+        furi_crash("SugGhz: Incorrect TX frequency.");
     }
     furi_assert(subghz->txrx->txrx_state != SubGhzTxRxStateSleep);
     furi_hal_subghz_idle();
     furi_hal_subghz_set_frequency_and_path(frequency);
-    hal_gpio_init(&gpio_cc1101_g0, GpioModeOutputPushPull, GpioPullNo, GpioSpeedLow);
-    hal_gpio_write(&gpio_cc1101_g0, true);
+    furi_hal_gpio_init(&gpio_cc1101_g0, GpioModeOutputPushPull, GpioPullNo, GpioSpeedLow);
+    furi_hal_gpio_write(&gpio_cc1101_g0, true);
     bool ret = furi_hal_subghz_tx();
     subghz->txrx->txrx_state = SubGhzTxRxStateTx;
     return ret;
@@ -197,6 +197,22 @@ void subghz_tx_stop(SubGhz* subghz) {
     notification_message(subghz->notifications, &sequence_reset_red);
 }
 
+void subghz_dialog_message_show_only_rx(SubGhz* subghz) {
+    DialogsApp* dialogs = subghz->dialogs;
+    DialogMessage* message = dialog_message_alloc();
+    dialog_message_set_text(
+        message,
+        "This frequency can\nonly be used for RX\nin your region",
+        38,
+        23,
+        AlignCenter,
+        AlignCenter);
+    dialog_message_set_icon(message, &I_DolphinFirstStart7_61x51, 67, 12);
+    dialog_message_set_buttons(message, "Back", NULL, NULL);
+    dialog_message_show(dialogs, message);
+    dialog_message_free(message);
+}
+
 bool subghz_key_load(SubGhz* subghz, const char* file_path) {
     furi_assert(subghz);
     furi_assert(file_path);
@@ -205,10 +221,10 @@ bool subghz_key_load(SubGhz* subghz, const char* file_path) {
     FlipperFormat* fff_data_file = flipper_format_file_alloc(storage);
     Stream* fff_data_stream = flipper_format_get_raw_stream(subghz->txrx->fff_data);
 
-    bool loaded = false;
+    SubGhzLoadKeyState load_key_state = SubGhzLoadKeyStateParseErr;
     string_t temp_str;
     string_init(temp_str);
-    uint32_t version;
+    uint32_t temp_data32;
 
     do {
         stream_clean(fff_data_stream);
@@ -217,24 +233,35 @@ bool subghz_key_load(SubGhz* subghz, const char* file_path) {
             break;
         }
 
-        if(!flipper_format_read_header(fff_data_file, temp_str, &version)) {
+        if(!flipper_format_read_header(fff_data_file, temp_str, &temp_data32)) {
             FURI_LOG_E(TAG, "Missing or incorrect header");
             break;
         }
 
         if(((!strcmp(string_get_cstr(temp_str), SUBGHZ_KEY_FILE_TYPE)) ||
             (!strcmp(string_get_cstr(temp_str), SUBGHZ_RAW_FILE_TYPE))) &&
-           version == SUBGHZ_KEY_FILE_VERSION) {
+           temp_data32 == SUBGHZ_KEY_FILE_VERSION) {
         } else {
             FURI_LOG_E(TAG, "Type or version mismatch");
             break;
         }
 
-        if(!flipper_format_read_uint32(
-               fff_data_file, "Frequency", (uint32_t*)&subghz->txrx->frequency, 1)) {
+        if(!flipper_format_read_uint32(fff_data_file, "Frequency", &temp_data32, 1)) {
             FURI_LOG_E(TAG, "Missing Frequency");
             break;
         }
+
+        if(!furi_hal_subghz_is_frequency_valid(temp_data32)) {
+            FURI_LOG_E(TAG, "Frequency not supported");
+            break;
+        }
+
+        if(!furi_hal_subghz_is_tx_allowed(temp_data32)) {
+            FURI_LOG_E(TAG, "This frequency can only be used for RX in your region");
+            load_key_state = SubGhzLoadKeyStateOnlyRx;
+            break;
+        }
+        subghz->txrx->frequency = temp_data32;
 
         if(!flipper_format_read_string(fff_data_file, "Preset", temp_str)) {
             FURI_LOG_E(TAG, "Missing Preset");
@@ -267,24 +294,37 @@ bool subghz_key_load(SubGhz* subghz, const char* file_path) {
         if(subghz->txrx->decoder_result) {
             subghz_protocol_decoder_base_deserialize(
                 subghz->txrx->decoder_result, subghz->txrx->fff_data);
+        } else {
+            FURI_LOG_E(TAG, "Protocol not found");
+            break;
         }
 
-        loaded = true;
+        load_key_state = SubGhzLoadKeyStateOK;
     } while(0);
 
-    if(!loaded) {
-        dialog_message_show_storage_error(subghz->dialogs, "Cannot parse\nfile");
-    }
-
     string_clear(temp_str);
-    //string_clear(path);
     flipper_format_free(fff_data_file);
     furi_record_close("storage");
 
-    return loaded;
+    switch(load_key_state) {
+    case SubGhzLoadKeyStateParseErr:
+        dialog_message_show_storage_error(subghz->dialogs, "Cannot parse\nfile");
+        return false;
+
+    case SubGhzLoadKeyStateOnlyRx:
+        subghz_dialog_message_show_only_rx(subghz);
+        return false;
+
+    case SubGhzLoadKeyStateOK:
+        return true;
+
+    default:
+        furi_crash("SubGhz: Unknown load_key_state.");
+        return false;
+    }
 }
 
-bool subghz_get_next_name_file(SubGhz* subghz) {
+bool subghz_get_next_name_file(SubGhz* subghz, uint8_t max_len) {
     furi_assert(subghz);
 
     Storage* storage = furi_record_open("storage");
@@ -295,9 +335,9 @@ bool subghz_get_next_name_file(SubGhz* subghz) {
     if(strcmp(subghz->file_name, "")) {
         //get the name of the next free file
         storage_get_next_filename(
-            storage, SUBGHZ_RAW_FOLDER, subghz->file_name, SUBGHZ_APP_EXTENSION, temp_str);
+            storage, SUBGHZ_RAW_FOLDER, subghz->file_name, SUBGHZ_APP_EXTENSION, temp_str, max_len);
 
-        strcpy(subghz->file_name, string_get_cstr(temp_str));
+        strncpy(subghz->file_name, string_get_cstr(temp_str), SUBGHZ_MAX_LEN_NAME);
         res = true;
     }
 
@@ -393,12 +433,14 @@ bool subghz_rename_file(SubGhz* subghz) {
     string_init_printf(
         new_path, "%s/%s%s", SUBGHZ_APP_FOLDER, subghz->file_name, SUBGHZ_APP_EXTENSION);
 
-    FS_Error fs_result =
-        storage_common_rename(storage, string_get_cstr(old_path), string_get_cstr(new_path));
+    if(string_cmp(old_path, new_path) != 0) {
+        FS_Error fs_result =
+            storage_common_rename(storage, string_get_cstr(old_path), string_get_cstr(new_path));
 
-    if(fs_result != FSE_OK) {
-        dialog_message_show_storage_error(subghz->dialogs, "Cannot rename\n file/directory");
-        ret = false;
+        if(fs_result != FSE_OK) {
+            dialog_message_show_storage_error(subghz->dialogs, "Cannot rename\n file/directory");
+            ret = false;
+        }
     }
 
     string_clear(old_path);
@@ -472,9 +514,9 @@ void subghz_hopper_update(SubGhz* subghz) {
     } else {
         subghz->txrx->hopper_state = SubGhzHopperStateRunnig;
     }
-
     // Select next frequency
-    if(subghz->txrx->hopper_idx_frequency < subghz_hopper_frequencies_count - 1) {
+    if(subghz->txrx->hopper_idx_frequency <
+       subghz_setting_get_hopper_frequency_count(subghz->setting) - 1) {
         subghz->txrx->hopper_idx_frequency++;
     } else {
         subghz->txrx->hopper_idx_frequency = 0;
@@ -485,7 +527,8 @@ void subghz_hopper_update(SubGhz* subghz) {
     };
     if(subghz->txrx->txrx_state == SubGhzTxRxStateIDLE) {
         subghz_receiver_reset(subghz->txrx->receiver);
-        subghz->txrx->frequency = subghz_hopper_frequencies[subghz->txrx->hopper_idx_frequency];
+        subghz->txrx->frequency = subghz_setting_get_hopper_frequency(
+            subghz->setting, subghz->txrx->hopper_idx_frequency);
         subghz_rx(subghz, subghz->txrx->frequency);
     }
 }

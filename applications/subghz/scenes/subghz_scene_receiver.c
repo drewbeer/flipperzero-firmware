@@ -111,7 +111,7 @@ bool subghz_scene_receiver_on_event(void* context, SceneManagerEvent event) {
 
     if(event.type == SceneManagerEventTypeCustom) {
         switch(event.event) {
-        case SubGhzCustomEventViewReceverBack:
+        case SubGhzCustomEventViewReceiverBack:
 
             // Stop CC1101 Rx
             subghz->state_notifications = SubGhzNotificationStateIDLE;
@@ -120,7 +120,7 @@ bool subghz_scene_receiver_on_event(void* context, SceneManagerEvent event) {
                 subghz_sleep(subghz);
             };
             subghz->txrx->hopper_state = SubGhzHopperStateOFF;
-            subghz->txrx->frequency = subghz_frequencies[subghz_frequencies_433_92];
+            subghz->txrx->frequency = subghz_setting_get_default_frequency(subghz->setting);
             subghz->txrx->preset = FuriHalSubGhzPresetOok650Async;
             subghz->txrx->idx_menu_chosen = 0;
             subghz_receiver_set_rx_callback(subghz->txrx->receiver, NULL, subghz);
@@ -134,13 +134,13 @@ bool subghz_scene_receiver_on_event(void* context, SceneManagerEvent event) {
             }
             return true;
             break;
-        case SubGhzCustomEventViewReceverOK:
+        case SubGhzCustomEventViewReceiverOK:
             subghz->txrx->idx_menu_chosen =
                 subghz_view_receiver_get_idx_menu(subghz->subghz_receiver);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneReceiverInfo);
             return true;
             break;
-        case SubGhzCustomEventViewReceverConfig:
+        case SubGhzCustomEventViewReceiverConfig:
             subghz->state_notifications = SubGhzNotificationStateIDLE;
             subghz->txrx->idx_menu_chosen =
                 subghz_view_receiver_get_idx_menu(subghz->subghz_receiver);
